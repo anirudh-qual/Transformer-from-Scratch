@@ -102,6 +102,87 @@ class MultiHeadAttention(nn.Module):
         value =value.view(value.shape[0],value.shape[1],self.h,self.d_k).transpose(1,2)
 
         x,self.attention_scores = MultiHeadAttention.attention(query,key,value,mask,self.dropout)
+        # Batch,h,seq_len,d_k -> batch,seq_len,h,d_k -> batch,seq_len,d_model
+        #View works on contiguous tensors, so we need to call .contiguous() after transpose as during transpose the tensor is not contiguous in memory
+        #One dim can be given as -1 to infer the size automatically in view
+        x = x.transpose(1,2).continguous().view(x.shape[0],-1,self.d_model)
+        return self.w_o(x)
+    
+class ResidualConnection(nn.Module):
+    def __init__(self,dropout:float):
+       super().__init__()
+       self.dropout = nn.Dropout(dropout)
+       self.norm = LayerNormalization()
+    def forward(self,x,layer):
+        return x + self.dropout(layer(self.norm(x)))
+    
+    
+class EncoderBlock(nn.Module):
+    def __init__(self,self_attention_block:MultiHeadAttention,feed_forward_block:FeedForwardNet,dropout:float):
+        super().__init__()
+        self.self_attention_block = self_attention_block
+        self.feed_forward_block  = feed_forward_block
+        self.dropout = nn.Dropout(dropout)
+        #nn.ModuleList -> List of layers, if we use normal list then the layers will not be registered as parameters of the model and will not be saved during model save
+        self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(2)])
+
+    def forward(self,x,mask):
+        x = self.residual_connections[0](x,lambda x: self.self_attention_block(x,x,x,mask))
+        x = self.residual_connections[1](x,self.feed_forward_block)
+        return x
+
+
+class Encoder(nn.Module):
+    def __init__(self,layers:nn.ModuleList):
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization()
+
+    def forward(self,x,mask):
+        for layer in self.layers:
+            x = layer(x,mask)
+        return self.norm(x)
+
+
+class DecoderBlock(nn.Module):
+    def __init__(self,self_attention_block:MultiHeadAttention,mask_multi_head_attn:MultiHeadAttention,feed_frwd_block:FeedForwardNet,dropout:float):
+
+        super().__init__()
+        self.mask_multi_head_attn = mask_multi_head_attn
+        self.self_attention_block = self_attention_block
+        self.feed_frwd_block = feed_frwd_block
+        self.residual_connections = nn.MultiList([ResidualConnection(dropout) for _ in range(3)])
+    
+    def forward(self,x,encoder_output,src_mask,tgt_mask):
+        x = self.residual_connections[0](x, lambda x : self.mask_multi_head_attn(x,x,x,tgt_mask))
+        x = self.residual_connections[1](x, lambda x:self.self_attention_block(x,encoder_output,encoder_output,src_mask))
+        x = self.residual_connections[2](x,self.feed_frwd_block)
+        return x
+
+class Decoder(nn.Module):
+    def __init__(self,layers:nn.ModuleList):
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization()
+
+    def forward(self,x,encoder_output,src_mask,tgt_mask):
+        for layer in self.layers:
+            x = layer(x,encoder_output,src_mask,tgt_mask)
+        return self.norm(x)
+            
+
+class Linearlayer(nn.Module):
+    def __init__(self, d_model:int,vocab_size:int):
+        super().__init__()
+        self.d_model = d_model
+        self.w = nn.Linear(d_model,vocab_size)
+    
+    def forward(self,x):
+        return torch.log_softmax(self.w(x),dim = -1)
+
+
+    
+
         
        
        
