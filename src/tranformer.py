@@ -181,7 +181,60 @@ class Linearlayer(nn.Module):
         return torch.log_softmax(self.w(x),dim = -1)
 
 
+class Transformer(nn.Module):
+    def __init__(self, encoder:Encoder,decoder:Decoder,ip_embed:InputEmbeddings,tgt_embed:InputEmbeddings,src_pos:PositionalEncoding,tgt_pos:PositionalEncoding,projec_layer:Linearlayer):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.ip_embed = ip_embed
+        self.tgt_embed = tgt_embed
+        self.src_pos = src_pos
+        self.tgt_pos = tgt_pos
+        self.projec_layer = projec_layer
+
+    def encode(self,x,src_mask):
+        x = self.ip_embed(x)
+        x = self.src_pos(x)
+        return self.encode(x,src_mask)
+
+    def decode(self,x,encoder_out,src_mask,tgt_mask):
+        x = self.tgt_embed(x)
+        x = self.tgt_pos(x)
+        return self.decode(x,encoder_out,src_mask,tgt_mask)
     
+    def project(self,x):
+        return self.projec_layer(x)
+    
+
+def build_transformer(src_vocab_size:int,tgt_vocab_size:int,src_seq_len:int,tgt_seq_len:int,d_model:int=512,N:int=6,h:int=8,dropout:float = 0.1,d_ff: int = 2048)->Transformer:
+    #Create Input Embeddings
+    ip_embed = InputEmbeddings(d_model,src_vocab_size)
+    tgt_embed = InputEmbeddings(d_model,tgt_vocab_size)
+
+    #Create Positional Encoding
+    src_pos = PositionalEncoding(d_model,src_seq_len,dropout)
+    tgt_pos = PositionalEncoding(d_model,tgt_seq_len,dropout)
+
+    #Create Encoder Blocks
+    encoder_layers = nn.ModuleList([EncoderBlock(MultiHeadAttention(d_model,h,dropout), FeedForwardNet(d_model,d_ff,dropout), dropout) for _ in range(N)])
+    encoder = Encoder(encoder_layers)
+
+    #Create Decoder Blocks
+    decoder_layers = nn.ModuleList([DecoderBlock(MultiHeadAttention(d_model,h,dropout), MultiHeadAttention(d_model,h,dropout), FeedForwardNet(d_model,d_ff,dropout), dropout) for _ in range(N)])
+    decoder = Decoder(decoder_layers)
+
+    #Create Linear Layer
+    proj_layer = Linearlayer(d_model,tgt_vocab_size)
+    transformer = Transformer(encoder, decoder, ip_embed, tgt_embed, src_pos, tgt_pos, proj_layer)
+
+    for p in transformer.parameters(): # Gives all parameters of the model(weights and biases)
+        if p.dim() > 1: # If the parameter is a weight matrix (dim > 1), we apply Xavier initialization
+            nn.init.xavier_uniform_(p)
+    
+    return transformer
+
+    
+
 
         
        
